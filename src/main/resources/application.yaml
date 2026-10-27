@@ -20,10 +20,12 @@ spring:
         min-idle: 1
         time-between-eviction-runs: 10s
   rabbitmq:
-    host: 127.0.0.1
+    # 虚拟机 docker 里的 RabbitMQ，vhost /show-ticket 已创建并授权
+    host: 192.168.100.130
     port: 5672
-    username: guest
-    password: guest
+    username: admin
+    password: 123
+    virtual-host: show-ticket
     listener:
       simple:
         acknowledge-mode: auto
