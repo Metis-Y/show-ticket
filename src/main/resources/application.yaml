@@ -1,0 +1,51 @@
+server:
+  port: 8081
+spring:
+  application:
+    name: show-ticket
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/show_ticket?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: 123456
+  redis:
+    # 你的虚拟机 Redis；若改用 docker-compose 起的实例，改成 127.0.0.1
+    host: 192.168.100.130
+    port: 6379
+    password: 123
+    lettuce:
+      pool:
+        max-active: 10
+        max-idle: 10
+        min-idle: 1
+        time-between-eviction-runs: 10s
+  rabbitmq:
+    host: 127.0.0.1
+    port: 5672
+    username: guest
+    password: guest
+    listener:
+      simple:
+        acknowledge-mode: auto
+        # 重试耗尽后投递到死信队列，而不是无限重回队列
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1000ms
+          multiplier: 2
+  jackson:
+    default-property-inclusion: non_null # JSON处理时忽略非空字段
+mybatis-plus:
+  type-aliases-package: com.showticket.entity # 别名扫描包
+app:
+  order:
+    # 订单超时时间（毫秒），延迟队列的 TTL。
+    # 演示用 1 分钟方便验证；生产可改成 15 * 60 * 1000
+    timeout-ms: 60000
+  warmup:
+    # 启动时把「场馆 GEO + 场馆缓存 + 票档库存」预热到 Redis
+    enabled: true
+logging:
+  level:
+    com.showticket: debug
