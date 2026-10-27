@@ -26,7 +26,12 @@ public class MvcConfig implements WebMvcConfigurer {
                             "/upload/**",
                             "/review/hot",
                             "/user/code",
-                            "/user/login"
+                            "/user/login",
+                            // Knife4j 在线接口文档
+                            "/doc.html",
+                            "/webjars/**",
+                            "/v3/api-docs/**",
+                            "/favicon.ico"
         ).order(1);
 
 
