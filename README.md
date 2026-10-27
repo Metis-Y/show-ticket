@@ -13,8 +13,9 @@
 | 语言 / 框架 | Java 21、Spring Boot 2.7、Spring MVC |
 | 持久层 | MySQL 8.0、MyBatis-Plus |
 | 缓存 | Redis 7（String / Hash / Set / ZSet / GEO / BitMap / HyperLogLog / Lua） |
-| 消息队列 | RabbitMQ 3.12（异步下单、TTL+死信延迟关单、消费重试、死信队列） |
+| 消息队列 | RabbitMQ 3.13（异步下单、TTL+死信延迟关单、消费重试、死信队列、vhost 隔离） |
 | 分布式协调 | Redisson（可重入锁） |
+| 接口文档 | Knife4j 4.0（OpenAPI 3） |
 | 其他 | Hutool、Lombok、Docker Compose |
 
 ---
@@ -29,6 +30,109 @@
 - **剧评**：发布剧评、点赞（ZSet 按时间排序）、点赞用户列表
 - **社交**：关注 / 取关、共同关注（Set 交集）、关注流 Feed（推模式 + 滚动分页）
 - **签到**：BitMap 按月存签到状态，位运算统计连续签到天数
+
+---
+
+## 怎么运行
+
+### 中间件清单（本机实际部署）
+
+| 组件 | 地址 | 账号 | 说明 |
+| --- | --- | --- | --- |
+| MySQL | 127.0.0.1:3306 | root / 123456 | 库名 `show_ticket`，已导入 `sql/show_ticket.sql` |
+| Redis | 192.168.100.130:6379 | 密码 123 | 虚拟机 |
+| RabbitMQ | 192.168.100.130:5672 | admin / 123 | 虚拟机 Docker，vhost `show-ticket`，管理台 http://192.168.100.130:15672 |
+
+换环境时改 `src/main/resources/application.yaml` 里对应的三段配置即可。
+
+### 启动步骤
+
+1. **数据库**：首次运行先导入 `sql/show_ticket.sql`（含建库、建表、种子数据：6 用户 / 5 分类 / 12 场馆 / 10 演出 / 6 条剧评）。
+2. **RabbitMQ**：确认 vhost 已创建并给账号授权：
+   ```bash
+   rabbitmqctl add_vhost show-ticket
+   rabbitmqctl set_permissions -p show-ticket admin ".*" ".*" ".*"
+   ```
+   交换机和队列**不用手动建**，应用启动时自动声明。
+3. **启动应用**：IDEA 里直接跑 `ShowTicketApplication`，或命令行 `mvn spring-boot:run`。
+4. 启动成功标志（控制台）：
+   ```
+   [预热] 场馆 GEO 写入完成，共 5 个分类
+   [预热] 完成：场馆 12 个，票档 10 个
+   ```
+
+### 常用配置
+
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `app.order.timeout-ms` | 60000 | 订单超时时间 = 延迟队列 TTL。**改了要先删 `ticket.delay.queue` 再重启**（队列级 TTL 对已存在队列不生效） |
+| `app.warmup.enabled` | true | 启动预热开关 |
+
+---
+
+## 怎么体验功能（无前端，用在线接口文档）
+
+浏览器打开 **http://localhost:8081/doc.html**（Knife4j），所有接口可视化调用。登录类接口需要在右上角「文档管理 → 全局参数设置」里加 `authorization` = 你的 token。
+
+### 场景一：抢票全链路（核心）
+
+1. `POST /user/code?phone=13800000001` 发验证码 → **验证码在控制台日志里**（`发送验证码成功xxxxxx`）
+2. `POST /user/login` body：`{"phone":"13800000001","code":"xxxxxx"}` → 拿到 token
+3. `POST /ticket-order/grab/1` 抢演出 1 → 立刻返回订单号（此刻订单还没落库，消息在 MQ 里）
+4. 等 2~3 秒 `GET /ticket-order/{订单号}` → `status: 1` 未支付，说明消费者已落库
+5. 再抢一次 `POST /ticket-order/grab/1` → 「每人限购一张，请勿重复下单」
+6. **分支 A（支付）**：`POST /ticket-order/pay/{订单号}` → `status: 2`
+   **分支 B（超时关单）**：什么都不做，等 1 分钟 → 订单自动变 `status: 4`，MySQL/Redis 库存 +1，限购占位释放，可以再抢一次
+7. 全程可开两个窗口盯日志：控制台看 `[MQ] 收到抢票消息` / `[关单] 超时未支付`，RabbitMQ 管理台看 `ticket.grab.queue` / `ticket.delay.queue` 的消息流转
+
+其他可以试的边界：`POST /ticket-order/grab/9` → 「还未开票」（种子数据里第 9 场 3 天后开票）。
+
+### 场景二：场馆与缓存
+
+- `GET /venue/1` 场馆详情（走逻辑过期缓存）
+- `GET /venue/of/type?typeId=1&current=1&x=121.49&y=31.19` 附近场馆，按距离排序（返回 439 米的梅赛德斯-奔驰文化中心）
+- `GET /venue/uv/1` 连刷几次，UV 只在换访问者时增长（HyperLogLog 去重）
+
+### 场景三：社交与签到
+
+- `PUT /follow/2/true` 关注用户 2 → `GET /follow/common/2` 共同关注
+- `POST /review` 发一条剧评 → 用另一个账号（13800000002）登录，`GET /review/of/follow?lastId=0` 收到推送（Feed 流）
+- `PUT /review/like/1` 点赞 → `GET /review/likes/1` 看点赞用户（按点赞时间排序）
+- `POST /user/sign` 签到 → `GET /user/sign/count` 连续签到天数
+
+---
+
+## 实测记录（2026-10-27，真实环境）
+
+环境：本机 JDK 21 + 虚拟机 Redis 7 / RabbitMQ 3.13（vhost `show-ticket`）+ 本机 MySQL 8.0。
+
+### 抢票端到端时间线
+
+| 时刻 | 事件 | 证据 |
+| --- | --- | --- |
+| 17:51:50.4 | 抢票接口返回订单号 653386116245749764 | Lua 预扣成功，消息进 MQ |
+| 17:51:50.482 | 消费者收到抢票消息（30ms 内） | `[MQ] 收到抢票消息 orderId=653386116245749764` |
+| 17:51:50.512 | 订单落库，status=1 | `GET /ticket-order/{id}` 返回未支付订单 |
+| 17:51:5x | 同一用户再次抢票被拒 | 「每人限购一张，请勿重复下单」 |
+| 17:52:50.462 | 延迟队列 TTL(60s) 到期，死信转入超时队列 | `[MQ] 收到超时关单消息` |
+| 17:52:50.488 | 关单完成：status=4，MySQL 库存+1，Redis 库存 49→50，限购占位释放 | 日志 + Redis 实查 |
+| 17:53:0x | 同一用户再次抢票成功 | 新订单号 653386498497839110 |
+
+### RabbitMQ 队列状态（管理台实查）
+
+```
+ticket.grab.queue     msgs=0   # 消费完
+ticket.delay.queue    msgs=1   # 还有待到期的延迟消息（下一笔订单的关单消息）
+ticket.timeout.queue  msgs=0
+ticket.dead.queue     msgs=0   # 无消费失败
+```
+
+### 容错与自动化验证
+
+- **MQ 宕机**：停掉 RabbitMQ 后抢票 → 返回「系统繁忙」，Redis 库存从 49 回补到 50、限购占位清空（发送失败补偿生效）
+- **vhost 错配**：配置写成 `/show-ticket` 时连接被拒（`NOT_ALLOWED - vhost not found`），修正后恢复——vhost 必须先在服务端创建
+- **集成测试**：`TicketOrderFlowTests` 覆盖「落库扣库存 → 重复消费幂等 → 超时关单回补 → 重复关单幂等」，`Tests run: 1, Failures: 0, Errors: 0`
+- **GEO/UV**：附近场馆返回 439 米结果；同一 IP 重复访问 UV 保持 1
 
 ---
 
@@ -93,16 +197,6 @@ RabbitMQ 原生不支持任意时长的延迟消息（需要额外插件），�
 
 如果 Redis 预扣成功但消息发送失败（broker 不可用），接口会立即回补 Redis 库存与限购标记，返回「系统繁忙」，避免「扣了票却没有订单」；落库时若 DB 库存不足（说明 Redis 与 DB 不一致），回补 Redis 并记录告警，消息正常 ack，不做无意义重试。
 
-### 为什么是 RabbitMQ
-
-| 方案 | 优点 | 在本项目里的取舍 |
-| --- | --- | --- |
-| RabbitMQ | 内存占用小、路由灵活、开箱即用 | 采用。延迟消息用 TTL+DLX 实现，逻辑清晰 |
-| RocketMQ | 自带延迟级别、事务消息、高吞吐 | broker 默认就要 4G 堆，本地开发太重 |
-| Redis Stream | 不引入新中间件 | 重试、死信、堆积监控都要自己实现 |
-
-> RabbitMQ 的队列 TTL 是**队列级**参数：修改 `app.order.timeout-ms` 后需要先删除 `ticket.delay.queue` 再重启，否则新参数不会生效（队列已存在时声明参数不一致会被忽略/报错）。
-
 ---
 
 ## 缓存与 Redis 数据结构
@@ -132,6 +226,8 @@ ticket.dlx (direct)
   └─ ticket.dead    -> ticket.dead.queue      重试耗尽后的死信
 ```
 
+多项目共用同一个 RabbitMQ 时，通过 vhost（本项目用 `show-ticket`）隔离交换机和队列。
+
 ---
 
 ## 目录结构
@@ -139,7 +235,7 @@ ticket.dlx (direct)
 ```
 show-ticket
 ├── sql/show_ticket.sql         # 建表 + 种子数据
-├── docker-compose.yml          # MySQL / Redis / RabbitMQ
+├── docker-compose.yml          # MySQL / Redis / RabbitMQ（备用一键环境）
 └── src/main/java/com/showticket
     ├── config/                 # MVC、MyBatis、Redisson、启动预热
     ├── controller/             # 接口层
@@ -148,47 +244,6 @@ show-ticket
     ├── entity/ mapper/ dto/    # 数据模型
     └── utils/                  # 缓存工具、全局 ID、拦截器
 ```
-
----
-
-## 快速开始
-
-### 1. 启动中间件
-
-```bash
-docker compose up -d
-```
-
-容器起来后：MySQL `127.0.0.1:3306`（root/123456）、Redis `127.0.0.1:6379`（密码 123）、RabbitMQ `127.0.0.1:5672`，管理台 http://localhost:15672 （guest/guest）。
-
-> 不用 Docker 的话：导入 `sql/show_ticket.sql`，启动 Redis 并设密码 123，再本地安装 RabbitMQ（需先装 Erlang）。
-> 队列和交换机由应用启动时自动声明，不需要在管理台手动建。
-
-### 2. 确认配置
-
-`src/main/resources/application.yaml`：
-
-- `spring.datasource`：MySQL 地址与密码
-- `spring.redis`：Redis 地址与密码
-- `spring.rabbitmq`：RabbitMQ 地址、账号
-- `app.order.timeout-ms`：订单超时时间，同时是延迟队列 TTL（默认 60000，演示用 1 分钟）
-- `app.warmup.enabled`：启动预热开关（默认 true）
-
-### 3. 启动
-
-```bash
-mvn spring-boot:run
-```
-
-启动日志里应能看到：
-
-```
-[预热] 场馆 GEO 写入完成，共 5 个分类
-[预热] showId=1 库存=50 开售窗口={begin=..., end=...}
-[预热] 完成：场馆 12 个，票档 10 个
-```
-
-> 预热会把场馆 GEO、场馆缓存、票档库存与开售窗口写入 Redis。抢票时如果 Redis 里没有数据，也会自动从 DB 懒加载一次。
 
 ---
 
@@ -213,56 +268,9 @@ mvn spring-boot:run
 | GET | `/review/likes/{id}` | 点赞用户列表 | 是 |
 | GET | `/review/of/follow` | 关注流（滚动分页） | 是 |
 | PUT | `/follow/{id}/{isFollow}` | 关注 / 取关 | 是 |
-| GET | `/follow/or/not/{id}` | 共同关注 | 是 |
+| GET | `/follow/common/{id}` | 共同关注 | 是 |
 | POST | `/user/sign` | 签到 | 是 |
 | GET | `/user/sign/count` | 连续签到天数 | 是 |
-
----
-
-## 演示流程
-
-```bash
-# 1. 登录（验证码看控制台日志）
-curl -X POST "http://localhost:8081/user/code?phone=13800000001"
-curl -X POST http://localhost:8081/user/login \
-  -H "Content-Type: application/json" \
-  -d '{"phone":"13800000001","code":"日志里的6位验证码"}'
-
-# 2. 抢票（TOKEN 换成上一步返回值）
-curl -X POST http://localhost:8081/ticket-order/grab/1 -H "authorization: TOKEN"
-
-# 3. 立刻查订单（消费者可能还没落库，稍等再查一次）
-curl http://localhost:8081/ticket-order/ORDER_ID -H "authorization: TOKEN"
-
-# 4. 不支付，等 1 分钟，再查订单应变为已取消（status=4）
-#    同时 Redis 库存 ticket:stock:1 会 +1，ticket:order:1 中该用户被移除
-redis-cli -a 123 get ticket:stock:1
-
-# 5. 再抢一次应该成功（限购占位已释放）
-curl -X POST http://localhost:8081/ticket-order/grab/1 -H "authorization: TOKEN"
-```
-
-验证重复下单：同一用户第二次抢同一场，Lua 返回 2，接口提示「每人限购一张」。
-
-验证未开票：种子数据里第 9 场开售时间是 3 天后，抢它会提示「还未开票」。
-
----
-
-## 已验证 / 未验证
-
-**已在本机实测通过（MySQL 8.0 + Redis）：**
-
-- 启动预热：GEO 写入 5 个分类、10 个票档库存与开售窗口
-- `/show-type/list`、`/venue/{id}`（逻辑过期缓存）、`/show/list/1` 正常返回
-- `/venue/of/type` 带坐标返回按距离排序的场馆（439 m）
-- `/venue/uv/1` 同一 IP 重复访问 UV 保持 1（HyperLogLog 去重）
-- 验证码登录、token 鉴权正常
-- MQ 不可用时抢票返回「系统繁忙」，Redis 库存从 49 回到 50、限购占位清空（失败补偿生效）
-- 订单核心逻辑集成测试通过：`TicketOrderFlowTests`（落库扣库存 → 重复消费幂等 → 超时关单回补 → 重复关单幂等）
-
-**待验证：**
-
-- RabbitMQ 真实 broker 下的完整链路（下单消息消费、TTL 到期转死信、重试与死信队列）。本机未安装 RabbitMQ，装好后按上面「演示流程」跑一遍即可。
 
 ---
 
@@ -283,4 +291,4 @@ curl -X POST http://localhost:8081/ticket-order/grab/1 -H "authorization: TOKEN"
 - 未开启 publisher confirm / return，极端情况下消息可能丢；可加本地消息表或事务性 outbox；
 - Redis 与 DB 库存回补是两步操作，进程崩溃时可能不一致；
 - 未接入 ES 与限流，搜索仍是 `LIKE`，秒杀接口也没有令牌桶；
-- 无前端页面，接口用 curl / Postman 演示。
+- 无前端页面，接口用 doc.html / curl 演示。
