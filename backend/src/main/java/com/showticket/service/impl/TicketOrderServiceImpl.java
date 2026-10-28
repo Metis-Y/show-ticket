@@ -96,7 +96,8 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         }
 
         log.info("[抢票] 预扣库存成功，等待异步落库 orderId={}, userId={}, showId={}", orderId, userId, showId);
-        return Result.ok(orderId);
+        // 订单号 18 位，转字符串返回，避免前端 JS 精度丢失后拿错误 ID 去支付/查询
+        return Result.ok(orderId.toString());
     }
 
     private int executeGrabScript(Long showId, Long userId) {
@@ -111,6 +112,7 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         return result == null ? -1 : result.intValue();
     }
 
+    //状态机
     private String grabFailMessage(int code) {
         return switch (code) {
             case 1 -> "票已售罄";
@@ -164,6 +166,8 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         log.info("[下单] 订单落库成功 orderId={}, userId={}, showId={}", orderId, userId, showId);
     }
 
+
+    //支付按钮功能
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Result payOrder(Long orderId) {
@@ -231,6 +235,7 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         return true;
     }
 
+    //查询详情
     @Override
     public Result queryOrderById(Long orderId) {
         Long userId = UserHolder.getUser().getId();

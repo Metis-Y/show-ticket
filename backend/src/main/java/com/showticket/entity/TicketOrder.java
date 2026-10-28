@@ -3,6 +3,8 @@ package com.showticket.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.experimental.Accessors;
@@ -28,7 +30,12 @@ public class TicketOrder implements Serializable {
 
     /**
      * 主键
+     * <p>
+     * 订单号是 18 位雪花式 ID，超过 JS Number.MAX_SAFE_INTEGER（9e15），
+     * 直接序列化成数字会被前端 JSON.parse 截断精度，支付/查询时按错误 ID 找不到订单。
+     * 统一序列化成字符串返回。
      */
+    @JsonSerialize(using = ToStringSerializer.class)
     @TableId(value = "id", type = IdType.INPUT)
     private Long id;
 
