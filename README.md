@@ -16,6 +16,7 @@
 | 消息队列 | RabbitMQ 3.13（异步下单、TTL+死信延迟关单、消费重试、死信队列、vhost 隔离） |
 | 分布式协调 | Redisson（可重入锁） |
 | 接口文档 | Knife4j 4.0（OpenAPI 3） |
+| 前端 | Vue 3 + Vite + Vue Router + Axios，nginx 托管并反向代理 `/api` |
 | 其他 | Hutool、Lombok、Docker Compose |
 
 ---
@@ -54,12 +55,38 @@
    rabbitmqctl set_permissions -p show-ticket admin ".*" ".*" ".*"
    ```
    交换机和队列**不用手动建**，应用启动时自动声明。
-3. **启动应用**：IDEA 里直接跑 `ShowTicketApplication`，或命令行 `mvn spring-boot:run`。
+3. **启动后端**：IDEA 里打开 `backend/` 目录，跑 `ShowTicketApplication`；或命令行：
+   ```bash
+   cd backend && mvn spring-boot:run
+   ```
 4. 启动成功标志（控制台）：
    ```
    [预热] 场馆 GEO 写入完成，共 5 个分类
    [预热] 完成：场馆 12 个，票档 10 个
    ```
+
+### 启动前端
+
+方式一：开发模式（改动即时热更新，Vite 自带 /api 代理）
+
+```bash
+cd frontend
+npm install          # 首次
+npm run dev          # http://localhost:5173
+```
+
+方式二：nginx 托管（更接近部署形态，模拟生产）
+
+```bash
+cd frontend
+npm install && npm run build
+# 双击 frontend/nginx/start.bat 启动（用桌面的 nginx，8080 端口）
+# 停止：双击 frontend/nginx/stop.bat
+```
+
+nginx 配置在 `frontend/nginx/conf/nginx.conf`：`/` 指向 `dist` 并支持 history 路由回退，`/api/` 反代到 `http://127.0.0.1:8081/`，前后端同源，无跨域。
+
+前端页面：登录（验证码看后端日志）→ 首页（分类 + 场馆列表 + 浏览器定位按距离排序）→ 场馆详情（UV、在售演出、抢票）→ 我的订单（5 秒轮询，可实时看到未支付订单被延迟消息自动取消）。
 
 ### 常用配置
 
@@ -133,6 +160,8 @@ ticket.dead.queue     msgs=0   # 无消费失败
 - **vhost 错配**：配置写成 `/show-ticket` 时连接被拒（`NOT_ALLOWED - vhost not found`），修正后恢复——vhost 必须先在服务端创建
 - **集成测试**：`TicketOrderFlowTests` 覆盖「落库扣库存 → 重复消费幂等 → 超时关单回补 → 重复关单幂等」，`Tests run: 1, Failures: 0, Errors: 0`
 - **GEO/UV**：附近场馆返回 439 米结果；同一 IP 重复访问 UV 保持 1
+- **前端构建**：`npm run build` 87 个模块、938ms，产物为 4 个页面 chunk + 1 个公共 chunk
+- **nginx 托管**：首页 `/`、SPA 路由 `/orders`、静态资源 JS 均返回 200（history 模式回退正常）
 
 ---
 
@@ -234,15 +263,22 @@ ticket.dlx (direct)
 
 ```
 show-ticket
-├── sql/show_ticket.sql         # 建表 + 种子数据
-├── docker-compose.yml          # MySQL / Redis / RabbitMQ（备用一键环境）
-└── src/main/java/com/showticket
-    ├── config/                 # MVC、MyBatis、Redisson、启动预热
-    ├── controller/             # 接口层
-    ├── mq/                     # RabbitMQ 拓扑、消息体、生产者、消费者
-    ├── service/impl/           # 业务实现
-    ├── entity/ mapper/ dto/    # 数据模型
-    └── utils/                  # 缓存工具、全局 ID、拦截器
+├── backend/                        # 后端（IDEA 只打开这个目录）
+│   ├── src/main/java/com/showticket
+│   │   ├── config/                 # MVC、MyBatis、Redisson、启动预热
+│   │   ├── controller/             # 接口层
+│   │   ├── mq/                     # RabbitMQ 拓扑、消息体、生产者、消费者
+│   │   ├── service/impl/           # 业务实现
+│   │   ├── entity/ mapper/ dto/    # 数据模型
+│   │   └── utils/                  # 缓存工具、全局 ID、拦截器
+│   └── pom.xml
+├── frontend/                       # 前端（Vue3 + Vite）
+│   ├── src/views/                  # 登录、首页、场馆详情、我的订单
+│   ├── nginx/                      # 本地 nginx 配置与启动脚本（8080 端口）
+│   └── vite.config.js              # 开发模式 /api 代理
+├── sql/show_ticket.sql             # 建表 + 种子数据
+├── docker-compose.yml              # MySQL / Redis / RabbitMQ（备用一键环境）
+└── README.md
 ```
 
 ---
@@ -290,5 +326,5 @@ show-ticket
 - 延迟关单依赖队列 TTL，改超时时间需要重建延迟队列；且长 TTL 场景下死信触发依赖队头消息，不适合差异化延迟；
 - 未开启 publisher confirm / return，极端情况下消息可能丢；可加本地消息表或事务性 outbox；
 - Redis 与 DB 库存回补是两步操作，进程崩溃时可能不一致；
-- 未接入 ES 与限流，搜索仍是 `LIKE`，秒杀接口也没有令牌桶；
-- 无前端页面，接口用 doc.html / curl 演示。
+- 前端为演示级实现：只覆盖登录/场馆/抢票/订单主流程，未做权限分级、图片上传和响应式适配；
+- 未接入 ES 与限流，搜索仍是 `LIKE`，秒杀接口也没有令牌桶。
