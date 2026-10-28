@@ -35,6 +35,21 @@
 
 ---
 
+## 技术文档
+
+按技术点拆分的方案文档，包含场景、选型对比（为什么不用 X）、踩坑记录和面试追问：
+
+- [docs/README.md](docs/README.md) — 文档索引
+- [01 抢票链路：Redis + Lua](docs/01-抢票链路-Redis与Lua.md)
+- [02 消息队列：RabbitMQ](docs/02-消息队列-RabbitMQ.md)
+- [03 缓存设计：Redis](docs/03-缓存设计-Redis.md)
+- [04 登录鉴权与风控](docs/04-登录鉴权与风控.md)
+- [05 订单号与幂等](docs/05-订单号与幂等.md)
+- [06 前端与 nginx 部署](docs/06-前端与nginx部署.md)
+- [面试问答手册](docs/面试问答.md)
+
+---
+
 ## 怎么运行
 
 ### 中间件清单（本机实际部署）
@@ -281,6 +296,7 @@ show-ticket
 │   ├── nginx/                      # 本地 nginx 配置与启动脚本（8080 端口）
 │   └── vite.config.js              # 开发模式 /api 代理
 ├── sql/show_ticket.sql             # 建表 + 种子数据
+├── docs/                           # 技术方案文档 + 面试问答
 ├── docker-compose.yml              # MySQL / Redis / RabbitMQ（备用一键环境）
 └── README.md
 ```
