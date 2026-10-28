@@ -13,8 +13,10 @@ import com.showticket.service.IUserService;
 import com.showticket.utils.RegexUtils;
 import com.showticket.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
@@ -23,6 +25,7 @@ import javax.servlet.http.HttpSession;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,18 +52,46 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
     private final UserMapper userMapper;
 
+    /** 验证码发送限流脚本：手机号冷却 + IP 小时配额，原子执行 */
+    private static final DefaultRedisScript<Long> SEND_CODE_LIMIT_SCRIPT;
+
+    static {
+        SEND_CODE_LIMIT_SCRIPT = new DefaultRedisScript<>();
+        SEND_CODE_LIMIT_SCRIPT.setLocation(new ClassPathResource("send_code_limit.lua"));
+        SEND_CODE_LIMIT_SCRIPT.setResultType(Long.class);
+    }
+
     public UserServiceImpl(UserMapper userMapper) {
         this.userMapper = userMapper;
     }
 
     //校检手机号，发送验证码
     @Override
-    public Result sendCode(String phone, HttpSession session) {
+    public Result sendCode(String phone, String clientIp) {
 
         if(RegexUtils.isPhoneInvalid(phone)){
 
             return Result.fail("手机号格式错误");
         };
+
+        // 发送限流：同一手机号 60 秒一次，同一 IP 每小时最多 10 次
+        Long limitResult = stringRedisTemplate.execute(
+                SEND_CODE_LIMIT_SCRIPT,
+                Arrays.asList(LOGIN_CODE_COOLDOWN_KEY + phone, LOGIN_CODE_IP_KEY + clientIp),
+                String.valueOf(LOGIN_CODE_COOLDOWN_SEC),
+                String.valueOf(LOGIN_CODE_IP_LIMIT),
+                String.valueOf(LOGIN_CODE_IP_WINDOW_SEC)
+        );
+        int limit = limitResult == null ? -1 : limitResult.intValue();
+        if (limit == 1) {
+            return Result.fail("验证码发送过于频繁，请稍后再试");
+        }
+        if (limit == 2) {
+            return Result.fail("当前网络发送次数过多，请稍后再试");
+        }
+        if (limit != 0) {
+            return Result.fail("验证码发送失败，请稍后重试");
+        }
 
         String code = RandomUtil.randomNumbers(6);
 
@@ -79,18 +110,36 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
         String code = loginForm.getCode();
         String phone=loginForm.getPhone();
-        //String cacheCode = (String) session.getAttribute("code");
-        String cacheCode = stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY+phone);
-
-        //校检验证码
-        if(cacheCode == null || !cacheCode.equals(code)){
-            return Result.fail("验证码错误");
-        }
 
         //校检手机号
         if(RegexUtils.isPhoneInvalid(phone)){
             return Result.fail("手机号格式错误");
         };
+
+        // 连续输错 5 次锁定 15 分钟，防止验证码爆破
+        String failKey = LOGIN_FAIL_KEY + phone;
+        String failCount = stringRedisTemplate.opsForValue().get(failKey);
+        if (failCount != null && Integer.parseInt(failCount) >= LOGIN_FAIL_MAX) {
+            Long ttl = stringRedisTemplate.getExpire(failKey, TimeUnit.SECONDS);
+            long minutes = (ttl == null || ttl <= 0) ? 15 : (ttl + 59) / 60;
+            return Result.fail("验证码错误次数过多，请 " + minutes + " 分钟后再试");
+        }
+
+        //String cacheCode = (String) session.getAttribute("code");
+        String cacheCode = stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY+phone);
+
+        //校检验证码
+        if(cacheCode == null || !cacheCode.equals(code)){
+            // 记录一次失败，首次失败时设置锁定窗口
+            Long count = stringRedisTemplate.opsForValue().increment(failKey);
+            if (count != null && count == 1L) {
+                stringRedisTemplate.expire(failKey, LOGIN_FAIL_LOCK_SEC, TimeUnit.SECONDS);
+            }
+            return Result.fail("验证码错误");
+        }
+
+        // 登录成功，清空失败计数
+        stringRedisTemplate.delete(failKey);
 
         //mybatisplus查询方法
         User user=query().eq("phone", phone).one();

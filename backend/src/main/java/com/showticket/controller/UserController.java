@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
 
 /**
@@ -39,9 +40,23 @@ public class UserController {
      * 发送手机验证码
      */
     @PostMapping("code")
-    public Result sendCode(@RequestParam("phone") String phone, HttpSession session) {
-        //发送短信验证码并保存验证码
-        return userService.sendCode(phone, session);
+    public Result sendCode(@RequestParam("phone") String phone, HttpServletRequest request) {
+        //发送短信验证码并保存验证码，clientIp 用于发送频率限流
+        return userService.sendCode(phone, getClientIp(request));
+    }
+
+    /**
+     * 取真实客户端 IP：经过 nginx 反代时优先用 X-Real-IP
+     */
+    private String getClientIp(HttpServletRequest request) {
+        String ip = request.getHeader("X-Real-IP");
+        if (ip == null || ip.isBlank()) {
+            ip = request.getHeader("X-Forwarded-For");
+        }
+        if (ip == null || ip.isBlank()) {
+            ip = request.getRemoteAddr();
+        }
+        return ip.split(",")[0].trim();
     }
 
     /**

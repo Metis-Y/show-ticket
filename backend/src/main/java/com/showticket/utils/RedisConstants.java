@@ -13,6 +13,18 @@ public class RedisConstants {
     public static final String LOGIN_USER_KEY = KEY_PREFIX + "login:token:";
     public static final Long LOGIN_USER_TTL = 30L;
 
+    /** 验证码发送限流：同一手机号 60 秒一次 */
+    public static final String LOGIN_CODE_COOLDOWN_KEY = KEY_PREFIX + "login:code:cooldown:";
+    public static final Long LOGIN_CODE_COOLDOWN_SEC = 60L;
+    /** 验证码发送限流：同一 IP 每小时最多 10 次 */
+    public static final String LOGIN_CODE_IP_KEY = KEY_PREFIX + "login:code:ip:";
+    public static final Long LOGIN_CODE_IP_LIMIT = 10L;
+    public static final Long LOGIN_CODE_IP_WINDOW_SEC = 3600L;
+    /** 登录失败计数：连续 5 次锁定 15 分钟 */
+    public static final String LOGIN_FAIL_KEY = KEY_PREFIX + "login:fail:";
+    public static final Integer LOGIN_FAIL_MAX = 5;
+    public static final Long LOGIN_FAIL_LOCK_SEC = 900L;
+
     //缓存空对象的ttl,封装后用不上
     public static final Long CACHE_NULL_TTL = 2L;
 
