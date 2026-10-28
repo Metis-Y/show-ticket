@@ -30,7 +30,9 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 public class RabbitMqConfig {
-
+    //每组的
+    //第一行是正常消息队列
+    //第二行是超时队列
     public static final String TICKET_EXCHANGE = "ticket.exchange";
     public static final String TICKET_DLX = "ticket.dlx";
 
@@ -49,11 +51,12 @@ public class RabbitMqConfig {
     @Value("${app.order.timeout-ms:60000}")
     private long timeoutMs;
 
+    //交换机
     @Bean
     public DirectExchange ticketExchange() {
         return new DirectExchange(TICKET_EXCHANGE, true, false);
     }
-
+    //超时交换机
     @Bean
     public DirectExchange deadLetterExchange() {
         return new DirectExchange(TICKET_DLX, true, false);
