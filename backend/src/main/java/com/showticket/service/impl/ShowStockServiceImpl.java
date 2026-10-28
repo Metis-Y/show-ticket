@@ -55,6 +55,6 @@ public class ShowStockServiceImpl extends ServiceImpl<ShowStockMapper, ShowStock
         if (!window.isEmpty()) {
             stringRedisTemplate.opsForHash().putAll(SHOW_WINDOW_KEY + showId, window);
         }
-        log.info("[预热] showId={} 库存={} 开售窗口={}", showId, stock.getStock(), window);
+        //log.info("[预热] showId={} 库存={} 开售窗口={}", showId, stock.getStock(), window);
     }
 }
