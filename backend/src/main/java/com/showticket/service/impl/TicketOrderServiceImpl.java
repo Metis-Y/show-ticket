@@ -25,6 +25,7 @@ import java.util.Collections;
 import java.util.List;
 
 import static com.showticket.utils.RedisConstants.GRAB_STOCK_KEY;
+import static com.showticket.utils.RedisConstants.KEY_PREFIX;
 import static com.showticket.utils.RedisConstants.TICKET_ORDER_KEY;
 
 /**
@@ -102,6 +103,7 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         Long result = stringRedisTemplate.execute(
                 GRAB_SCRIPT,
                 Collections.emptyList(),
+                KEY_PREFIX,
                 showId.toString(),
                 userId.toString(),
                 String.valueOf(Instant.now().getEpochSecond())

@@ -19,6 +19,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.showticket.utils.RedisConstants.FOLLOW_KEY;
+
 /**
  * <p>
  *  服务实现类
@@ -54,13 +56,13 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
             // 3.1.关注：插入数据
             boolean success=save(new Follow().setUserId(userId).setFollowUserId(followUserId));
             if (success){
-                stringRedisTemplate.opsForSet().add("follows:"+userId,followUserId.toString());
+                stringRedisTemplate.opsForSet().add(FOLLOW_KEY + userId, followUserId.toString());
             }
         } else {
             // 3.2.取消关注：删除数据
             boolean success=remove(new QueryWrapper<Follow>().eq("user_id", userId).eq("follow_user_id", followUserId));
             if (success) {
-                stringRedisTemplate.opsForSet().remove("follows:"+userId,followUserId.toString());
+                stringRedisTemplate.opsForSet().remove(FOLLOW_KEY + userId, followUserId.toString());
             }
         }
 
@@ -72,9 +74,9 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     public Result followCommons(Long id) {
         // 1.获取当前用户
         Long userId = UserHolder.getUser().getId();
-        String key = "follows:" + userId;
+        String key = FOLLOW_KEY + userId;
         //2.求交集
-        String key2 = "follows:" + id;
+        String key2 = FOLLOW_KEY + id;
         Set<String> intersect = stringRedisTemplate.opsForSet().intersect(key, key2);
         if (intersect == null || intersect.isEmpty()) {
         //无交集

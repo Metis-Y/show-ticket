@@ -12,7 +12,7 @@ public class SimpleRedisLock implements ILock{
     private String name;
     private StringRedisTemplate stringRedisTemplate;
     //key的前缀
-    private static final String KEY_PREFIX = "lock:";
+    private static final String KEY_PREFIX = "show-ticket:lock:";
     //线程前缀
     private static final String ID_PREFIX = UUID.randomUUID().toString();
 

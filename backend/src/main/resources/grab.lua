@@ -1,12 +1,13 @@
 -- 抢票预校验：开售时间 + 库存 + 一人一票，Redis 内原子执行
--- ARGV[1] = showId, ARGV[2] = userId, ARGV[3] = 当前 epoch 秒
-local showId = ARGV[1]
-local userId = ARGV[2]
-local now = tonumber(ARGV[3])
+-- ARGV[1] = key 前缀, ARGV[2] = showId, ARGV[3] = userId, ARGV[4] = 当前 epoch 秒
+local prefix = ARGV[1]
+local showId = ARGV[2]
+local userId = ARGV[3]
+local now = tonumber(ARGV[4])
 
-local stockKey = 'ticket:stock:' .. showId
-local orderKey = 'ticket:order:' .. showId
-local windowKey = 'ticket:window:' .. showId
+local stockKey = prefix .. 'ticket:stock:' .. showId
+local orderKey = prefix .. 'ticket:order:' .. showId
+local windowKey = prefix .. 'ticket:window:' .. showId
 
 -- 0. 未预热
 local stock = redis.call('get', stockKey)
