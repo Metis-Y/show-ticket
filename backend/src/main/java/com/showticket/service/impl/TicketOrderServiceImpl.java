@@ -109,7 +109,7 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
                 userId.toString(),
                 String.valueOf(Instant.now().getEpochSecond())
         );
-        return result == null ? -1 : result.intValue();
+        return result.intValue();
     }
 
     //状态机
