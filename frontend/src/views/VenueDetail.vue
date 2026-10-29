@@ -1,24 +1,67 @@
 <template>
-  <div class="page" v-if="venue">
-    <div class="card">
-      <h2>{{ venue.name }}</h2>
-      <div class="line">{{ venue.area }} · {{ venue.address }} · 营业 {{ venue.openHours }}</div>
-      <div class="line">评分 {{ (venue.score / 10).toFixed(1) }} · 均价 ¥{{ (venue.avgPrice / 100).toFixed(0) }} · 本页 UV {{ uv }}</div>
-    </div>
-
-    <h3>在售演出</h3>
-    <div v-if="shows.length === 0" class="empty">暂无在售演出</div>
-    <div v-for="s in shows" :key="s.id" class="card">
-      <div class="card-head"><b>{{ s.title }}</b></div>
-      <div class="line">{{ s.subTitle }}</div>
-      <div class="line">
-        <span class="price">¥{{ (s.payValue / 100).toFixed(0) }}</span>
-        <span class="origin">¥{{ (s.actualValue / 100).toFixed(0) }}</span>
-        · 库存 {{ s.stock ?? '—' }}
+  <div class="page-inner" v-if="venue">
+    <section class="ticket masthead">
+      <div class="stub">
+        <span class="stub-vert">{{ venue.area }}</span>
       </div>
-      <div class="line" v-if="s.beginTime">售票 {{ fmt(s.beginTime) }} ~ {{ fmt(s.endTime) }}</div>
-      <button class="primary" @click="grab(s.id)">立即抢票</button>
-    </div>
+      <div class="tear"></div>
+      <div class="ticket-main">
+        <img v-if="venue.images" class="hero-photo" :src="firstImg(venue.images)" :alt="venue.name" />
+        <h1 class="page-title">{{ venue.name }}</h1>
+        <p class="addr">{{ venue.area }} {{ venue.address }}</p>
+        <dl class="meta">
+          <div>
+            <dt>营业时间</dt>
+            <dd>{{ venue.openHours }}</dd>
+          </div>
+          <div>
+            <dt>评分</dt>
+            <dd>{{ (venue.score / 10).toFixed(1) }} 分</dd>
+          </div>
+          <div>
+            <dt>均价</dt>
+            <dd><span class="price">¥{{ yuan(venue.avgPrice) }}</span></dd>
+          </div>
+          <div>
+            <dt>看过</dt>
+            <dd>{{ uv }} 人</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <h2 class="section-title">在售演出</h2>
+    <div v-if="shows.length === 0" class="empty">这个场馆暂时没有在售演出，去别的场馆看看</div>
+    <article v-for="s in shows" :key="s.id" class="ticket">
+      <div class="stub">
+        <span class="stub-vert">副券</span>
+        <span class="stub-price">¥{{ yuan(s.payValue) }}</span>
+      </div>
+      <div class="tear"></div>
+      <div class="ticket-main">
+        <h3 class="item-title">{{ s.title }}</h3>
+        <p class="addr">{{ s.subTitle }}</p>
+        <dl class="meta">
+          <div>
+            <dt>原价</dt>
+            <dd><span class="origin">¥{{ yuan(s.actualValue) }}</span></dd>
+          </div>
+          <div>
+            <dt>库存</dt>
+            <dd>{{ s.stock ?? '—' }} 张</dd>
+          </div>
+          <div v-if="s.beginTime">
+            <dt>售票</dt>
+            <dd>{{ fmt(s.beginTime) }} 起</dd>
+          </div>
+        </dl>
+        <p v-if="s.rules" class="rules">{{ s.rules }}</p>
+        <div class="btn-row">
+          <button v-if="saleState(s).ok" class="btn btn-primary" @click="grab(s.id)">立即抢票</button>
+          <button v-else class="btn btn-ghost" disabled>{{ saleState(s).text }}</button>
+        </div>
+      </div>
+    </article>
   </div>
 </template>
 
@@ -26,6 +69,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import request from '../api'
+import { toast, ticketToast } from '../toast'
 
 const route = useRoute()
 const router = useRouter()
@@ -45,13 +89,31 @@ function fmt(t) {
   return String(t || '').replace('T', ' ').slice(0, 16)
 }
 
+function yuan(v) {
+  return (v / 100).toFixed(0)
+}
+
+// 场馆图片支持逗号分隔多张，取第一张
+function firstImg(images) {
+  return String(images).split(',')[0]
+}
+
+// 抢票按钮的三种真实状态：未开售 / 已售罄 / 在售
+function saleState(s) {
+  const now = Date.now()
+  if (s.stock === 0) return { ok: false, text: '已售罄' }
+  if (s.beginTime && new Date(s.beginTime).getTime() > now) return { ok: false, text: fmt(s.beginTime) + ' 开售' }
+  if (s.endTime && new Date(s.endTime).getTime() < now) return { ok: false, text: '已停售' }
+  return { ok: true, text: '立即抢票' }
+}
+
 async function grab(showId) {
   if (!localStorage.getItem('token')) {
-    alert('请先登录')
+    toast('请先登录后再抢票')
     router.push('/login')
     return
   }
   const orderId = await request.post('/ticket-order/grab/' + showId)
-  alert('抢票成功！订单号：' + orderId + '\n\n订单正在通过 MQ 异步落库，未支付订单 60 秒后自动取消。\n到「我的订单」页可以实时观察状态变化。')
+  ticketToast(orderId)
 }
 </script>
