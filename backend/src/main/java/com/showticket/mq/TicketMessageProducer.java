@@ -4,7 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 /**
  * 抢票相关消息的统一出口
@@ -17,7 +17,7 @@ public class TicketMessageProducer {
     private RabbitTemplate rabbitTemplate;
 
     /**
-     * 抢票成功后的异步下单消息
+     * 抢票成功后异步下单
      */
     public void sendGrabOrder(TicketOrderMessage message) {
         rabbitTemplate.convertAndSend(
@@ -26,7 +26,7 @@ public class TicketMessageProducer {
     }
 
     /**
-     * 投递到延迟队列，TTL 到期后由死信路由到超时队列
+     * 投递延迟消息，TTL 到期后转投超时队列
      */
     public void sendOrderTimeout(Long orderId) {
         rabbitTemplate.convertAndSend(

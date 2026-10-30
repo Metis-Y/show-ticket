@@ -18,7 +18,7 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -29,9 +29,12 @@ import static com.showticket.utils.RedisConstants.KEY_PREFIX;
 import static com.showticket.utils.RedisConstants.TICKET_ORDER_KEY;
 
 /**
- * <p>
- *  抢票 / 订单服务
- * </p>
+ * 抢票 / 订单服务
+ *
+ * 抢票链路分两段：
+ * 1. 接口层只做 Redis 校验与预扣（grab.lua），立即返回订单号；
+ * 2. 扣 DB 库存、订单落库交给 MQ 消费者异步完成。
+ * 超时未支付由延迟消息触发关单并回补库存。
  *
  * @author show-ticket
  * @since 2026-01-01
@@ -40,11 +43,12 @@ import static com.showticket.utils.RedisConstants.TICKET_ORDER_KEY;
 @Slf4j
 public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, TicketOrder> implements ITicketOrderService {
 
-    /** 订单状态：1 未支付 */
+    // 订单状态，与 ticket_order.status 字段一一对应
+    /** 未支付 */
     public static final int STATUS_UNPAID = 1;
-    /** 订单状态：2 已支付 */
+    /** 已支付 */
     public static final int STATUS_PAID = 2;
-    /** 订单状态：4 已取消 */
+    /** 已取消 */
     public static final int STATUS_CANCELED = 4;
 
     @Resource
@@ -64,6 +68,7 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         GRAB_SCRIPT.setResultType(Long.class);
     }
 
+    //抢票功能
     @Override
     public Result grabTicket(Long showId) {
         UserDTO user = UserHolder.getUser();
@@ -87,9 +92,10 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         // 2. 发送异步下单消息，抢票接口只做 Redis 操作，保持轻量
         try {
             ticketMessageProducer.sendGrabOrder(new TicketOrderMessage(orderId, userId, showId));
-            // 3. 投递延迟关单消息，TTL 到期后由死信路由到超时队列
+            // 3. 投递延迟关单消息，TTL 到期后转投超时队列
             ticketMessageProducer.sendOrderTimeout(orderId);
         } catch (Exception e) {
+            // 消息没发出去就不会有消费者扣 DB 库存，Redis 预扣必须回滚，否则票会凭空少一张
             log.error("[抢票] 消息发送失败，回补 Redis 预扣库存 showId={}, userId={}", showId, userId, e);
             rollbackSeat(showId, userId);
             return Result.fail("系统繁忙，请稍后重试");
@@ -100,6 +106,11 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         return Result.ok(orderId.toString());
     }
 
+    /**
+     * 执行 grab.lua：KEYS 传空，脚本内自行用前缀 + showId 拼出所有 key
+     *
+     * @return 0 校验通过且已预扣；1 售罄；2 重复下单；3 未开票；4 停售；5 未预热
+     */
     private int executeGrabScript(Long showId, Long userId) {
         Long result = stringRedisTemplate.execute(
                 GRAB_SCRIPT,
@@ -112,7 +123,7 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         return result.intValue();
     }
 
-    //状态机
+    /** 失败码 -> 提示文案，与 grab.lua 的 return 值一一对应 */
     private String grabFailMessage(int code) {
         return switch (code) {
             case 1 -> "票已售罄";
@@ -128,6 +139,7 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
      * 消费抢票消息：落库。
      * 幂等：同一订单号已存在直接返回；扣库存与插单在同一事务内，任一失败都不留脏数据。
      */
+    //校验通过，抢票下单消费者调用这个方法，开始创建订单
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void createTicketOrder(TicketOrderMessage message) {
@@ -142,13 +154,14 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         }
 
         // 2. 扣减 DB 库存：Redis 只是预扣，DB 才是最终依据
+        //    条件更新 stock > 0 起到乐观锁作用，更新 0 行即说明 DB 已无票
         boolean deducted = showStockService.update()
                 .setSql("stock = stock - 1")
                 .eq("show_id", showId)
                 .gt("stock", 0)
                 .update();
         if (!deducted) {
-            // Redis 有票而 DB 无票，说明数据不一致：回补 Redis 并告警，正常 ack 避免无意义重试
+            // Redis 有票而 DB 无票，说明数据不一致：回补 Redis 并告警
             log.error("[下单] DB 库存不足，回补 Redis 占位 orderId={}, showId={}", orderId, showId);
             rollbackSeat(showId, userId);
             return;
@@ -167,7 +180,10 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
     }
 
 
-    //支付按钮功能
+    /**
+     * 支付：只有未支付订单能改成已支付。
+     * 用条件更新（where status = 1）代替先查后改，防止与超时关单并发时状态被覆盖。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Result payOrder(Long orderId) {
@@ -201,12 +217,14 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
      * 超时关单：延迟消息到期后执行。
      * 幂等：只有 status=1 才会被更新，重复执行/支付后执行都不会重复回补库存。
      */
+    //超时关单，延迟消息到期后超时消费者执行
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean cancelTimeoutOrder(Long orderId) {
         TicketOrder order = getById(orderId);
         if (order == null) {
-            // 下单消息还没消费完，抛异常让 MQ 稍后重试
+            // 下单消息还没消费完，抛出异常让事务回滚、消息重回队列重试；
+            // 重试耗尽后会进死信队列，不会丢单
             throw new IllegalStateException("订单尚未创建，稍后重试 orderId=" + orderId);
         }
         if (order.getStatus() != STATUS_UNPAID) {
@@ -235,7 +253,7 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         return true;
     }
 
-    //查询详情
+    /** 查订单详情，只允许查自己的订单，防止遍历订单号 */
     @Override
     public Result queryOrderById(Long orderId) {
         Long userId = UserHolder.getUser().getId();
@@ -257,7 +275,9 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
     }
 
     /**
-     * 回补 Redis：票数 +1，并允许该用户重新抢票
+     * 回补 Redis：票数 +1，并把 userId 移出一人一票集合。
+     * 不删集合里的 userId 的话，该用户这一场将永远抢不了票。
+     * 注意只回补 Redis，DB 库存由调用方按场景自己处理（下单失败时 DB 未扣、关单时 DB 已扣需加回）。
      */
     private void rollbackSeat(Long showId, Long userId) {
         stringRedisTemplate.opsForValue().increment(GRAB_STOCK_KEY + showId);

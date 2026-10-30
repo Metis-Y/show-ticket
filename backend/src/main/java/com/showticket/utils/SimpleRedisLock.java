@@ -8,15 +8,21 @@ import java.util.Collections;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 基于 Redis 的简易分布式锁
+ *
+ * 加锁用 SETNX + TTL；value 存「进程 UUID + 线程 id」，
+ * 解锁前先用 Lua 比对 value，保证只能删自己的锁。
+ */
 public class SimpleRedisLock implements ILock{
     private String name;
     private StringRedisTemplate stringRedisTemplate;
-    //key的前缀
+    // 锁 key 前缀，实际 key = 前缀 + 业务名
     private static final String KEY_PREFIX = "show-ticket:lock:";
-    //线程前缀
+    // 进程级唯一前缀：应用重启后 UUID 变化，避免误判旧锁归属
     private static final String ID_PREFIX = UUID.randomUUID().toString();
 
-    //加载lua脚本
+    // 加载解锁脚本
     private static final DefaultRedisScript<Long> UNLOCK_SCRIPT;
     static {
         UNLOCK_SCRIPT = new DefaultRedisScript<>();
@@ -31,17 +37,17 @@ public class SimpleRedisLock implements ILock{
 
     @Override
     public boolean tryLock(long timeoutSec) {
-        //获取线程
+        // 锁的持有者标识 = 进程 UUID + 线程 id，精确到线程
         String threadId = ID_PREFIX+Thread.currentThread().threadId();
-        //互斥锁
+        // SETNX + TTL：key 不存在才能加锁，同时写入过期时间避免死锁
         Boolean success=stringRedisTemplate.opsForValue()
                         .setIfAbsent(KEY_PREFIX+name,threadId , timeoutSec, TimeUnit.SECONDS);
-        //拆箱防止空指针
+        // 用 equals 拆箱，避免 null 拆箱报空指针
         return Boolean.TRUE.equals(success);
     }
 
 
-    //使用lua脚本
+    // 用 Lua 把「判断持有者 + 删除」合成一个原子操作，避免误删其他线程的锁
     @Override
     public void unlock() {
 

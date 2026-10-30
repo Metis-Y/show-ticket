@@ -6,3 +6,6 @@ target/
 *.iml
 .vscode/
 .DS_Store
+
+# Python 压测脚本的字节码缓存
+__pycache__/

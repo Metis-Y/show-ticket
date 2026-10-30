@@ -8,17 +8,18 @@ spring:
     url: jdbc:mysql://127.0.0.1:3306/show_ticket?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: root
     password: 123456
-  redis:
-    # 你的虚拟机 Redis；若改用 docker-compose 起的实例，改成 127.0.0.1
-    host: 192.168.100.130
-    port: 6379
-    password: 123
-    lettuce:
-      pool:
-        max-active: 10
-        max-idle: 10
-        min-idle: 1
-        time-between-eviction-runs: 10s
+  data:
+    redis:
+      # 你的虚拟机 Redis；若改用 docker-compose 起的实例，改成 127.0.0.1
+      host: 192.168.100.130
+      port: 6379
+      password: 123
+      lettuce:
+        pool:
+          max-active: 10
+          max-idle: 10
+          min-idle: 1
+          time-between-eviction-runs: 10s
   rabbitmq:
     # 虚拟机 docker 里的 RabbitMQ，vhost /show-ticket 已创建并授权
     host: 192.168.100.130
