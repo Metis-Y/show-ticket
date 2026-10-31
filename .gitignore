@@ -9,3 +9,12 @@ target/
 
 # Python 压测脚本的字节码缓存
 __pycache__/
+
+# 压测运行产物（只保留脚本、jmx、README）
+loadtest/result*.jtl
+loadtest/report*/
+loadtest/tokens.csv
+loadtest/gc.log*
+loadtest/flight*.jfr
+loadtest/flight_dump.jfr
+loadtest/__pycache__/

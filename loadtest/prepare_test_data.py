@@ -148,7 +148,7 @@ INSERT INTO tb_user_info (user_id, city, introduce, fans, followee, gender, cred
         tokens.append(token)
         redis_conn.cmd("HSET", "show-ticket:login:token:" + token,
                        "id", uid, "nickName", "tester%d" % uid, "icon", "")
-        redis_conn.cmd("EXPIRE", "show-ticket:login:token:" + token, 3600)
+        redis_conn.cmd("EXPIRE", "show-ticket:login:token:" + token, 28800)
     redis_conn.close()
 
     print("[5/5] 写 tokens.csv ...")
