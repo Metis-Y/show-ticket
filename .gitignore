@@ -18,3 +18,6 @@ loadtest/gc.log*
 loadtest/flight*.jfr
 loadtest/flight_dump.jfr
 loadtest/__pycache__/
+
+# docs 文档仅保留本地，不再入库推送
+docs/*.md
