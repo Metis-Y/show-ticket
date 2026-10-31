@@ -194,7 +194,7 @@ DELETE FROM tb_user WHERE id BETWEEN {id_min} AND {id_max};
         import base64
         import urllib.request
         auth = base64.b64encode(("%s:%s" % (args.mq_user, args.mq_pass)).encode()).decode()
-        for queue in ("ticket.grab.queue", "ticket.delay.queue", "ticket.timeout.queue"):
+        for queue in ("ticket.grab.queue", "ticket.delay.queue", "ticket.timeout.queue", "ticket.dead.queue"):
             url = "http://%s:15672/api/queues/%s/%s/contents" % (args.mq_host, args.mq_vhost, queue)
             req = urllib.request.Request(url, method="DELETE")
             req.add_header("Authorization", "Basic " + auth)

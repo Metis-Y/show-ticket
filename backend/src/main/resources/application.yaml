@@ -37,6 +37,9 @@ spring:
           max-attempts: 3
           initial-interval: 1000ms
           multiplier: 2
+    cache:
+      channel:
+        size: 200
   jackson:
     default-property-inclusion: non_null # JSON处理时忽略非空字段
 mybatis-plus:
