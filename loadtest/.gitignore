@@ -1,0 +1,8 @@
+# 压测产物与敏感数据：不入库
+tokens.csv
+__pycache__/
+*.jtl
+*.jfr
+*.log
+gc.log*
+report*/
