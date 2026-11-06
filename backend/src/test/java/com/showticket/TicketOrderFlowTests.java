@@ -9,7 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import static com.showticket.utils.RedisConstants.GRAB_STOCK_KEY;
 import static com.showticket.utils.RedisConstants.TICKET_ORDER_KEY;

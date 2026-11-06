@@ -5,7 +5,7 @@ import com.showticket.dto.Result;
 import com.showticket.service.ITicketOrderService;
 import org.springframework.web.bind.annotation.*;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 /**
  * <p>

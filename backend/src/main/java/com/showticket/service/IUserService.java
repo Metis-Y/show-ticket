@@ -5,7 +5,7 @@ import com.showticket.dto.LoginFormDTO;
 import com.showticket.dto.Result;
 import com.showticket.entity.User;
 
-import javax.servlet.http.HttpSession;
+import jakarta.servlet.http.HttpSession;
 
 /**
  * <p>

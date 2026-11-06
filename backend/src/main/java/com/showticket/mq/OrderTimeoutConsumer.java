@@ -5,10 +5,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 /**
- * 超时关单消费者：延迟队列 TTL 到期后，消息被死信路由到这里
+ * 超时关单消费者：延迟队列到期后检查订单，未支付则关单
  */
 @Slf4j
 @Component

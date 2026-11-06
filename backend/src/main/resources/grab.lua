@@ -1,5 +1,6 @@
 -- 抢票预校验：开售时间 + 库存 + 一人一票，Redis 内原子执行
 -- ARGV[1] = key 前缀, ARGV[2] = showId, ARGV[3] = userId, ARGV[4] = 当前 epoch 秒
+-- 只有返回0才能通过
 local prefix = ARGV[1]
 local showId = ARGV[2]
 local userId = ARGV[3]
