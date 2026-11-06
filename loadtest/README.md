@@ -8,7 +8,7 @@ N 个不同用户抢 50 张票。接口细节与历史结论见 `docs/07-压测�
 | --- | --- |
 | `grab.jmx` | JMeter 压测计划（GUI 直跑版，含 500 / 1000 两个档位，右键线程组禁用/启用切换） |
 | `prepare_tokens.py` | 造 N 个登录 token 写 Redis，并刷新 `tokens.csv` |
-| `reset_round.py` | 轮间复位：清订单表、重置库存、清一人一票占位 |
+| `reset_round.py` | 轮间复位：清订单表、重置库存、清一人一票占位；`--purge-mq` 顺带清 MQ 队列（延迟关单/死信） |
 | `tokens.csv` | 每行一个 token（无表头），由 prepare 脚本生成；1500 行覆盖两档 |
 | `result_tree.jtl` | 「查看结果树」自动写入的结果文件（追加式，开跑前删掉即清零） |
 
@@ -23,10 +23,11 @@ N 个不同用户抢 50 张票。接口细节与历史结论见 `docs/07-压测�
 cd D:\quan_zhan\show-ticket
 
 # 1) 造 token（初始有效 2 小时，每次请求自动续期 30 分钟；压测前必跑，1500 覆盖两档）
+#    会自动删掉 Redis 里上一轮的旧 token（想保留加 --keep-old）
 python loadtest/prepare_tokens.py --count 1500
 
-# 2) 复位数据（库存满 50、订单表干净）
-python loadtest/reset_round.py
+# 2) 复位数据（库存满 50、订单表干净；--purge-mq 清掉上一轮延迟关单/死信残留）
+python loadtest/reset_round.py --purge-mq
 ```
 
 3. 双击 `D:\develop\JMeter\apache-jmeter-5.6.3\apache-jmeter-5.6.3\bin\jmeter.bat` 打开 GUI：
