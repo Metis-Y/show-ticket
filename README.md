@@ -10,16 +10,16 @@
 
 | 层次      | 技术                                                                     |
 | ------- | ---------------------------------------------------------------------- |
-| 语言 / 框架 | Java 21、Spring Boot 2.7.18、Spring MVC                                     |
+| 语言 / 框架 | Java 21、Spring Boot 3.5.7、Spring MVC                                     |
 | 持久层     | MySQL 8.0、MyBatis-Plus                                                 |
 | 缓存      | Redis 7（String / Hash / Set / ZSet / GEO / BitMap / HyperLogLog / Lua） |
 | 消息队列    | RabbitMQ 3.13（异步下单、TTL+死信延迟关单、消费重试、死信队列、vhost 隔离）                      |
 | 分布式协调   | Redisson（可重入锁）                                                         |
-| 接口文档    | Knife4j 4.0（OpenAPI 3）                                                 |
+| 接口文档    | Knife4j 4.5（OpenAPI 3.1）                                                 |
 | 前端      | Vue 3 + Vite + Vue Router + Axios，nginx 托管并反向代理 `/api`                 |
 | 其他      | Hutool、Lombok、Docker Compose                                           |
 
-> 版本说明：Spring Boot 2.7.18 官方支持 Java 8～21，与 JDK 21 兼容（本机实测）；2.7 线 OSS 维护已于 2023-11 结束，升级 Boot 3.x（javax→jakarta）列入优化规划。
+> 版本说明：2026-10-31 从 Spring Boot 2.7.18 升级至 3.5.7（Spring 6.2 / Java 21），完成 javax→jakarta 迁移，并适配 MyBatis-Plus 3.5.7、Redisson 3.52、Knife4j 4.5（springdoc 2.8）；启动、接口冒烟与单测均通过。
 
 ---
 
