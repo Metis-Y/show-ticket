@@ -45,7 +45,7 @@
         </collectionProp>
       </HeaderManager>
       <hashTree/>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="500 档（默认启用）" enabled="false">
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="500 档（默认启用）" enabled="true">
         <intProp name="ThreadGroup.num_threads">500</intProp>
         <intProp name="ThreadGroup.ramp_time">1</intProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
@@ -56,7 +56,7 @@
         </elementProp>
       </ThreadGroup>
       <hashTree>
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="500档-抢票 /ticket-order/grab/1" enabled="false">
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="500档-抢票 /ticket-order/grab/1">
           <stringProp name="HTTPSampler.domain">localhost</stringProp>
           <stringProp name="HTTPSampler.port">8081</stringProp>
           <stringProp name="HTTPSampler.protocol">http</stringProp>
@@ -72,7 +72,7 @@
         </HTTPSamplerProxy>
         <hashTree/>
       </hashTree>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="1000 档（默认禁用，跑千并发时启用这个、禁用上面的）">
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="1000 档（默认禁用，跑千并发时启用这个、禁用上面的）" enabled="false">
         <intProp name="ThreadGroup.num_threads">1000</intProp>
         <intProp name="ThreadGroup.ramp_time">1</intProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
@@ -83,7 +83,7 @@
         </elementProp>
       </ThreadGroup>
       <hashTree>
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="1000档-抢票 /ticket-order/grab/1">
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="1000档-抢票 /ticket-order/grab/1" enabled="false">
           <stringProp name="HTTPSampler.domain">localhost</stringProp>
           <stringProp name="HTTPSampler.port">8081</stringProp>
           <stringProp name="HTTPSampler.protocol">http</stringProp>
@@ -99,7 +99,7 @@
         </HTTPSamplerProxy>
         <hashTree/>
       </hashTree>
-      <ResultCollector guiclass="ViewResultsFullVisualizer" testclass="ResultCollector" testname="查看结果树（已开启，写入 result_tree.jtl）">
+      <ResultCollector guiclass="ViewResultsFullVisualizer" testclass="ResultCollector" testname="查看结果树（已开启，写入 result_tree.jtl）" enabled="true">
         <boolProp name="ResultCollector.error_logging">false</boolProp>
         <objProp>
           <name>saveConfig</name>

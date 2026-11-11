@@ -40,6 +40,8 @@ public class RedisConstants {
     public static final String SHOW_WINDOW_KEY = KEY_PREFIX + "ticket:window:";
     /** 已抢到票的用户集合，用于一人一票 */
     public static final String TICKET_ORDER_KEY = KEY_PREFIX + "ticket:order:";
+    /** 抢票接口限流令牌桶 key（v1 单接口全局） */
+    public static final String RATE_LIMIT_KEY = KEY_PREFIX + "rate:grab";
     /** 场馆详情页 UV（HyperLogLog） */
     public static final String VENUE_UV_KEY = KEY_PREFIX + "venue:uv:";
 

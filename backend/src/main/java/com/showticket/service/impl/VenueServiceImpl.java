@@ -44,20 +44,26 @@ public class VenueServiceImpl extends ServiceImpl<VenueMapper, Venue> implements
 
     @Override
     public Result queryById(Long id) {
-        //方便递归调用
-        //Venue venue = queryWithMutex(id);
-        //调用逻辑过期加线程池加互斥锁
-        /*暂时不管 缓存 不存在的问题*/
-        //在测试类那里预热
-        //嫌麻烦就换回去无锁的方法
         Venue venue = cacheClient.queryWithLogicalExpire(
                 RedisConstants.CACHE_VENUE_KEY, id, Venue.class,
                 this::getById, RedisConstants.CACHE_VENUE_TTL, TimeUnit.MINUTES
         );
-
-        if (venue == null) {
+        if (venue != null) {
+            return Result.ok(venue);
+        }
+        // 未命中：先看是否已有「空值占位」，有就直接返回不打 DB（穿透保护）
+        String key = CACHE_VENUE_KEY + id;
+        String cached = stringRedisTemplate.opsForValue().get(key);
+        if (cached != null && cached.isEmpty()) {
             return Result.fail("场馆不存在");
         }
+        // 缓存未预热但库里有：回写逻辑过期缓存；库里没有：写空串占位，短 TTL 防穿透
+        venue = getById(id);
+        if (venue == null) {
+            cacheClient.set(key, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
+            return Result.fail("场馆不存在");
+        }
+        cacheClient.setWithLogicalExpire(key, venue, CACHE_VENUE_TTL, TimeUnit.MINUTES);
         return Result.ok(venue);
     }
 

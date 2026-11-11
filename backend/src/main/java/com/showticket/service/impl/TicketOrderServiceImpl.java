@@ -12,6 +12,8 @@ import com.showticket.service.ITicketOrderService;
 import com.showticket.utils.RedisIdWorker;
 import com.showticket.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationContext;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -60,6 +62,16 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
     @Resource
     private TicketMessageProducer ticketMessageProducer;
 
+    /**
+     * 对照实验开关：async=MQ 异步落库（默认，线上实现）
+     * sync=请求线程内直接落库（仅用于压测对比「落库移出请求路径」的收益）
+     */
+    @Value("${app.grab.mode:async}")
+    private String grabMode;
+
+    @Resource
+    private ApplicationContext applicationContext;
+
     private static final DefaultRedisScript<Long> GRAB_SCRIPT;
 
     static {
@@ -87,6 +99,23 @@ public class TicketOrderServiceImpl extends ServiceImpl<TicketOrderMapper, Ticke
         }
         if (code != 0) {
             return Result.fail(grabFailMessage(code));
+        }
+
+        // 对照实验（sync 模式）：在请求线程内直接落库。
+        // 必须经容器代理调用，否则同类内部调用会绕过 @Transactional，失去「扣库存 + 插单」同事务的语义。
+        if ("sync".equalsIgnoreCase(grabMode)) {
+            try {
+                applicationContext.getBean(ITicketOrderService.class)
+                        .createTicketOrder(new TicketOrderMessage(orderId, userId, showId));
+                // 关单仍走延迟队列：两种模式保持一致，只对比「落库是否在请求路径内」
+                ticketMessageProducer.sendOrderTimeout(orderId);
+            } catch (Exception e) {
+                log.error("[抢票][sync] 落库失败，回补 Redis 预扣 showId={}, userId={}", showId, userId, e);
+                rollbackSeat(showId, userId);
+                return Result.fail("系统繁忙，请稍后重试");
+            }
+            log.info("[抢票] 同步落库成功 orderId={}, userId={}, showId={}", orderId, userId, showId);
+            return Result.ok(orderId.toString());
         }
 
         // 2. 发送异步下单消息，抢票接口只做 Redis 操作，保持轻量

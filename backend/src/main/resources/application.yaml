@@ -27,6 +27,11 @@ spring:
     username: admin
     password: 123
     virtual-host: show-ticket
+    # 生产者确认：抢票下单消息开启 confirm + return，nack/退回时回补 Redis 预扣
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
     listener:
       simple:
         acknowledge-mode: auto
@@ -37,9 +42,6 @@ spring:
           max-attempts: 3
           initial-interval: 1000ms
           multiplier: 2
-    cache:
-      channel:
-        size: 200
   jackson:
     default-property-inclusion: non_null # JSON处理时忽略非空字段
 mybatis-plus:
@@ -49,9 +51,12 @@ app:
     # 订单超时时间（毫秒），延迟队列的 TTL。
     # 演示用 1 分钟方便验证；生产可改成 15 * 60 * 1000
     timeout-ms: 60000
+  grab:
+    # 抢票落库模式：async=MQ 异步削峰（默认）；sync=请求线程内直接落库（无削峰对照）
+    mode: async
   warmup:
     # 启动时把「场馆 GEO + 场馆缓存 + 票档库存」预热到 Redis
     enabled: true
 logging:
   level:
-    com.showticket: debug
+    com.showticket: info

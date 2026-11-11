@@ -9,24 +9,38 @@
   5. RabbitMQ（--purge-mq 时）   延迟/超时/抢票/死信四个队列清空
 （开售窗口 show-ticket:ticket:window:{showId} 不动，预热写过就一直有效）
 
-内置等待：清表前默认 sleep 2 秒，让上一轮在途的异步落库先消费完，
-避免复位后又被旧消息插进新行（--wait 0 可跳过）。
+为什么建议 --purge-mq，以及"清了还在重试"是怎么回事：
+  · 上一轮发出的「60 秒延迟关单」消息到期后进 ticket.timeout.queue；
+    如果此时订单已被 TRUNCATE，消费者找不到订单 → 抛异常 → Spring 重试
+    （max-attempts=3，退避 1s/2s）→ 重试耗尽后进死信队列。
+  · 管理台的 purge 只能清「还没投递出去」的消息（ready）；
+    已经投递给消费者、正在重试的消息是 unacked，purge 清不掉，只能等它跑完 3 次重试。
+    所以"清了还有重试日志"不是清理失败，而是那批消息已经不在队列里了。
 
-为什么建议 --purge-mq：上一轮发出的「60 秒延迟关单」消息在复位后到期时，
-对应订单已被 TRUNCATE，消费端对空订单重试 3 次后进死信队列（
-spring.rabbitmq default-requeue-rejected=false + max-attempts=3）。
-清掉延迟队列就不会有这批噪音；死信队列也会随轮数累积，一并清掉更干净。
+本脚本的复位顺序（--purge-mq 时）：
+  1) 等 2 秒，让上一轮在途的异步落库收尾
+  2) 先 purge 一次：清掉延迟队列里还没到期的、超时队列里排队中的消息
+  3) 等 unacked 排空（--drain-timeout 上限）：此时订单还在，
+     重试中的关单消息能正常处理并 ack，不会进死信
+  4) 清订单表 + 复位 DB/Redis 库存与占位
+  5) 最后再 purge 一次：清掉 2~3 期间可能新进死信的消息
+
+来不及等排空时：先停后端再复位——连接关闭后 unacked 会重回 ready，再清就干净了。
+若不希望复位后出现这类重试噪音，也可以把 cancelTimeoutOrder 里「订单不存在」
+的处理改为记日志后直接 ack（代价是放弃"延迟消息先于下单消息到达"这一极小概率的兜底重试）。
 
 用法：
     python reset_round.py                    # 默认 show=1, stock=50, 等待 2s
     python reset_round.py --stock 100        # 换库存量
-    python reset_round.py --purge-mq         # 顺带清 RabbitMQ 相关队列
+    python reset_round.py --purge-mq         # 顺带清 RabbitMQ 并等待重试排空
+    python reset_round.py --purge-mq --drain-timeout 120
     python reset_round.py --wait 0           # 不等在途消息，立即清表
 
 依赖：pip install pymysql redis
 """
 import argparse
 import base64
+import json
 import time
 import urllib.error
 import urllib.parse
@@ -47,23 +61,82 @@ MQ_QUEUES = (
 )
 
 
-def purge_mq_queues(args):
-    """经 RabbitMQ HTTP 管理台清空队列。尽力而为：失败只警告，不影响其他复位步骤。"""
-    auth = base64.b64encode(f"{args.mq_user}:{args.mq_password}".encode()).decode()
+def _mgmt_url(args, suffix):
     vhost = urllib.parse.quote(args.mq_vhost.strip("/") or "/", safe="")
+    return f"http://{args.mq_host}:{args.mq_port}/api/queues/{vhost}/{suffix}"
+
+
+def _mgmt_request(args, suffix, method):
+    auth = base64.b64encode(f"{args.mq_user}:{args.mq_password}".encode()).decode()
+    req = urllib.request.Request(_mgmt_url(args, suffix), method=method)
+    req.add_header("Authorization", f"Basic {auth}")
+    return urllib.request.urlopen(req, timeout=5)
+
+
+def purge_mq_queues(args):
+    """经 RabbitMQ HTTP 管理台清空队列。
+
+    只对 ready 消息有效：已经投递给消费者、正在重试的消息是 unacked，
+    purge 清不掉（那批消息已经不在队列里，只能等它重试结束）。
+    """
+    ok = True
     for q in MQ_QUEUES:
-        url = f"http://{args.mq_host}:{args.mq_port}/api/queues/{vhost}/{q}/contents"
-        req = urllib.request.Request(url, method="DELETE")
-        req.add_header("Authorization", f"Basic {auth}")
         try:
-            urllib.request.urlopen(req, timeout=5)
+            _mgmt_request(args, f"{q}/contents", "DELETE")
             print(f"[OK] MQ 队列已清空: {q}")
         except urllib.error.HTTPError as e:
             # 404 = 队列还没被声明过（后端没消费/没跑过），可忽略
             print(f"[WARN] MQ 队列 {q} 清理失败 HTTP {e.code}（不存在可忽略）")
         except Exception as e:
             print(f"[WARN] MQ 清队列中断: {e}（管理台不可达？其余复位不受影响）")
+            ok = False
             break
+    return ok
+
+
+def queue_stats(args):
+    """返回 {queue: (ready, unacked)}；管理台不可达时返回 None。"""
+    stats = {}
+    for q in MQ_QUEUES:
+        try:
+            with _mgmt_request(args, q, "GET") as resp:
+                d = json.load(resp)
+            stats[q] = (d.get("messages_ready", 0), d.get("messages_unacknowledged", 0))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:      # 队列不存在 = 空
+                stats[q] = (0, 0)
+            else:
+                return None
+        except Exception:
+            return None
+    return stats
+
+
+def drain_mq(args):
+    """轮询等待重试中的消息（unacked）跑完并 ack。
+
+    此时订单还没清，关单消息能正常处理，所以通常很快静默、不会进死信。
+    """
+    print(f"[..] 等待重试中的消息排空（上限 {args.drain_timeout:.0f}s）...")
+    deadline = time.time() + args.drain_timeout
+    last = None
+    while time.time() < deadline:
+        stats = queue_stats(args)
+        if stats is None:
+            print("[WARN] 管理台不可达，跳过排空检查")
+            return False
+        busy = {q: s for q, s in stats.items() if s[0] or s[1]}
+        if not busy:
+            print("[OK] MQ 已无残留消息（ready 与 unacked 都为空）")
+            return True
+        info = ", ".join(f"{q}: 待消费 {r} / 重试中 {u}" for q, (r, u) in busy.items())
+        if info != last:           # 只在数字变化时打印，避免刷屏
+            print(f"[..] {info}")
+            last = info
+        time.sleep(2)
+    print("[WARN] 等待超时，仍有消息在重试：可加大 --drain-timeout，"
+          "或先停后端再复位（unacked 会随连接关闭重回 ready）")
+    return False
 
 
 def main():
@@ -81,7 +154,9 @@ def main():
     ap.add_argument("--redis-port", type=int, default=6379)
     ap.add_argument("--redis-password", default="123")
     ap.add_argument("--purge-mq", action="store_true",
-                    help="顺带经管理台清空 RabbitMQ 抢票相关队列（去上一轮延迟关单噪音）")
+                    help="顺带清空 RabbitMQ 抢票相关队列，并等待重试消息排空")
+    ap.add_argument("--drain-timeout", type=float, default=90,
+                    help="等待重试中的消息排空的最长秒数（--purge-mq 时生效）")
     ap.add_argument("--mq-host", default="192.168.100.130")
     ap.add_argument("--mq-port", type=int, default=15672, help="RabbitMQ 管理台端口")
     ap.add_argument("--mq-user", default="admin")
@@ -94,7 +169,13 @@ def main():
         print(f"[..] 等待 {args.wait}s，让上一轮在途消息消费完...")
         time.sleep(args.wait)
 
-    # 1) MySQL：清订单表 + 重置 DB 库存
+    # 1) 先清一次 MQ：清掉延迟队列里还没到期的、超时队列里排队中的消息
+    if args.purge_mq:
+        purge_mq_queues(args)
+        # 2) 等 unacked 排空：此时订单还在，重试中的关单消息能成功 ack
+        drain_mq(args)
+
+    # 3) MySQL：清订单表 + 重置 DB 库存
     conn = pymysql.connect(host=args.mysql_host, port=args.mysql_port, user=args.mysql_user,
                            password=args.mysql_password, database=args.mysql_db)
     try:
@@ -115,7 +196,7 @@ def main():
     finally:
         conn.close()
 
-    # 2) Redis：库存写满 + 清一人一票占位
+    # 4) Redis：库存写满 + 清一人一票占位
     r = redis.Redis(host=args.redis_host, port=args.redis_port,
                     password=args.redis_password, decode_responses=True)
     r.ping()
@@ -123,7 +204,7 @@ def main():
     r.delete(REDIS_KEY_ORDER_SET.format(args.show))
     print(f"[OK] Redis: {REDIS_KEY_STOCK.format(args.show)}={args.stock}，一人一票占位已清空")
 
-    # 3) RabbitMQ：清掉上一轮残留的延迟关单/死信（可选）
+    # 5) 最后再清一次：把 1~4 期间可能新进死信的消息一并清掉
     if args.purge_mq:
         purge_mq_queues(args)
 

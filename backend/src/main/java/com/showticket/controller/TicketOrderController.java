@@ -3,6 +3,7 @@ package com.showticket.controller;
 
 import com.showticket.dto.Result;
 import com.showticket.service.ITicketOrderService;
+import com.showticket.utils.RateLimit;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.annotation.Resource;
@@ -26,6 +27,7 @@ public class TicketOrderController {
      * 抢票（Redis + Lua 预扣库存，MQ 异步落库）
      */
     @PostMapping("grab/{id}")
+    @RateLimit(capacity = 500, rate = 500)
     public Result grabTicket(@PathVariable("id") Long showId) {
         return ticketOrderService.grabTicket(showId);
     }

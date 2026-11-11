@@ -37,12 +37,6 @@ public class MvcConfig implements WebMvcConfigurer {
                             "/review/hot",
                             "/user/code",
                             "/user/login",
-                            // Knife4j 在线接口文档。Spring 6 的 PathPattern 下 /v3/api-docs/**
-                            // 不再匹配不带尾斜杠的 /v3/api-docs 本身，需要显式列出
-                            "/doc.html",
-                            "/webjars/**",
-                            "/v3/api-docs",
-                            "/v3/api-docs/**",
                             "/favicon.ico"
         ).order(1);
 

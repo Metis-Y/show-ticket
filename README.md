@@ -2,7 +2,7 @@
 
 一个面向演出票务场景的高并发电商后端：场馆/演出浏览、实名抢票、下单支付、超时自动关单、观演剧评与社交关注。
 
-核心难点集中在**抢票链路**：用 Redis + Lua 做原子预扣与限购，用 RabbitMQ 做异步下单削峰，用「TTL + 死信队列」做超时关单与库存回补。
+核心难点集中在**抢票链路**：用 Redis + Lua 做原子预扣与限购，用 RabbitMQ 做异步下单削峰，用「TTL + 死信路由」做超时关单与库存回补。
 
 ---
 
@@ -15,11 +15,9 @@
 | 缓存      | Redis 7（String / Hash / Set / ZSet / GEO / BitMap / HyperLogLog / Lua） |
 | 消息队列    | RabbitMQ 3.13（异步下单、TTL+死信延迟关单、消费重试、死信队列、vhost 隔离）                      |
 | 分布式协调   | Redisson（可重入锁）                                                         |
-| 接口文档    | Knife4j 4.5（OpenAPI 3.1）                                                 |
 | 前端      | Vue 3 + Vite + Vue Router + Axios，nginx 托管并反向代理 `/api`                 |
 | 其他      | Hutool、Lombok、Docker Compose                                           |
 
-> 版本说明：2026-10-31 从 Spring Boot 2.7.18 升级至 3.5.7（Spring 6.2 / Java 21），完成 javax→jakarta 迁移，并适配 MyBatis-Plus 3.5.7、Redisson 3.52、Knife4j 4.5（springdoc 2.8）；启动、接口冒烟与单测均通过。
 
 ---
 
@@ -30,6 +28,7 @@
 - **场馆**：详情缓存（逻辑过期防击穿 + 空值缓存防穿透）、附近场馆 GEO、详情页 UV 统计
 - **演出**：按场馆查询在售演出与票档库存
 - **抢票**：Lua 原子校验「开售时间 + 库存 + 一人一票」，RabbitMQ 异步落库
+- **限流**：抢票接口 Redis Lua 令牌桶限流，允许突发、限制均速，挡开售瞬间洪峰
 - **订单**：支付、订单详情、我的订单、超时未支付自动取消并回补库存
 - **剧评**：发布剧评、点赞（ZSet 按时间排序）、点赞用户列表
 - **社交**：关注 / 取关、共同关注（Set 交集）、关注流 Feed（推模式 + 滚动分页）
@@ -48,8 +47,8 @@
 - [04 登录鉴权与风控](docs/04-登录鉴权与风控.md)
 - [05 订单号与幂等](docs/05-订单号与幂等.md)
 - [06 前端与 nginx 部署](docs/06-前端与nginx部署.md)
-- [07 压测实战：六轮排查复盘](docs/07-压测实战-六轮排查复盘.md)
-- [08 退票功能设计](docs/08-退票功能设计.md)
+- [07 压测实战：冷启动与稳态](docs/07-压测实战-冷启动与稳态.md)
+- [08 抢票入口防护](docs/08-抢票入口防护设计.md)
 - [面试问答手册](docs/面试问答.md)
 
 ---
@@ -106,8 +105,6 @@ npm install && npm run build
 
 nginx 配置在 `frontend/nginx/conf/nginx.conf`：`/` 指向 `dist` 并支持 history 路由回退，`/api/` 反代到 `http://127.0.0.1:8081/`，前后端同源，无跨域。
 
-前端页面：登录（验证码看后端日志）→ 首页（分类 + 场馆列表 + 浏览器定位按距离排序）→ 场馆详情（UV、在售演出、抢票）→ 我的订单（5 秒轮询，可实时看到未支付订单被延迟消息自动取消）。
-
 ### 常用配置
 
 | 配置 | 默认值 | 说明 |
@@ -117,9 +114,6 @@ nginx 配置在 `frontend/nginx/conf/nginx.conf`：`/` 指向 `dist` 并支持 h
 
 ---
 
-## 怎么体验功能（无前端，用在线接口文档）
-
-浏览器打开 **http://localhost:8081/doc.html**（Knife4j），所有接口可视化调用。登录类接口需要在右上角「文档管理 → 全局参数设置」里加 `authorization` = 你的 token。
 
 ### 场景一：抢票全链路（核心）
 
@@ -140,80 +134,8 @@ nginx 配置在 `frontend/nginx/conf/nginx.conf`：`/` 指向 `dist` 并支持 h
 - `GET /venue/of/type?typeId=1&current=1&x=121.49&y=31.19` 附近场馆，按距离排序（返回 439 米的梅赛德斯-奔驰文化中心）
 - `GET /venue/uv/1` 连刷几次，UV 只在换访问者时增长（HyperLogLog 去重）
 
-### 场景三：社交与签到
-
-- `PUT /follow/2/true` 关注用户 2 → `GET /follow/common/2` 共同关注
-- `POST /review` 发一条剧评 → 用另一个账号（13800000002）登录，`GET /review/of/follow?lastId=0` 收到推送（Feed 流）
-- `PUT /review/like/1` 点赞 → `GET /review/likes/1` 看点赞用户（按点赞时间排序）
-- `POST /user/sign` 签到 → `GET /user/sign/count` 连续签到天数
 
 ---
-
-## 实测记录（2026-10-27，真实环境）
-
-环境：本机 JDK 21 + 虚拟机 Redis 7 / RabbitMQ 3.13（vhost `show-ticket`）+ 本机 MySQL 8.0。
-
-### 抢票端到端时间线
-
-| 时刻 | 事件 | 证据 |
-| --- | --- | --- |
-| 17:51:50.4 | 抢票接口返回订单号 653386116245749764 | Lua 预扣成功，消息进 MQ |
-| 17:51:50.482 | 消费者收到抢票消息（30ms 内） | `[MQ] 收到抢票消息 orderId=653386116245749764` |
-| 17:51:50.512 | 订单落库，status=1 | `GET /ticket-order/{id}` 返回未支付订单 |
-| 17:51:5x | 同一用户再次抢票被拒 | 「每人限购一张，请勿重复下单」 |
-| 17:52:50.462 | 延迟队列 TTL(60s) 到期，死信转入超时队列 | `[MQ] 收到超时关单消息` |
-| 17:52:50.488 | 关单完成：status=4，MySQL 库存+1，Redis 库存 49→50，限购占位释放 | 日志 + Redis 实查 |
-| 17:53:0x | 同一用户再次抢票成功 | 新订单号 653386498497839110 |
-
-### RabbitMQ 队列状态（管理台实查）
-
-```
-ticket.grab.queue     msgs=0   # 消费完
-ticket.delay.queue    msgs=1   # 还有待到期的延迟消息（下一笔订单的关单消息）
-ticket.timeout.queue  msgs=0
-ticket.dead.queue     msgs=0   # 无消费失败
-```
-
-### 容错与自动化验证
-
-- **MQ 宕机**：停掉 RabbitMQ 后抢票 → 返回「系统繁忙」，Redis 库存从 49 回补到 50、限购占位清空（发送失败补偿生效）
-- **vhost 错配**：配置写成 `/show-ticket` 时连接被拒（`NOT_ALLOWED - vhost not found`），修正后恢复——vhost 必须先在服务端创建
-- **集成测试**：`TicketOrderFlowTests` 覆盖「落库扣库存 → 重复消费幂等 → 超时关单回补 → 重复关单幂等」，`Tests run: 1, Failures: 0, Errors: 0`
-- **GEO/UV**：附近场馆返回 439 米结果；同一 IP 重复访问 UV 保持 1
-- **前端构建**：`npm run build` 87 个模块、938ms，产物为 4 个页面 chunk + 1 个公共 chunk
-- **nginx 托管**：首页 `/`、SPA 路由 `/orders`、静态资源 JS 均返回 200（history 模式回退正常）
-- **登录风控**：同手机号连续发码第二次被拒（60 秒冷却）；同 IP 第 11 次发码被拒（10 次/小时）；验证码连错 5 次后第 6 次提示锁定 15 分钟；正确登录后失败计数自动清零
-
----
-
-## 抢票链路设计
-
-```mermaid
-sequenceDiagram
-    participant C as 客户端
-    participant A as 应用
-    participant R as Redis
-    participant MQ as RabbitMQ
-    participant DB as MySQL
-
-    C->>A: POST /ticket-order/grab/{showId}
-    A->>R: 执行 grab.lua（时间/库存/限购 + 预扣）
-    alt 校验不通过
-        R-->>A: 1~5
-        A-->>C: 售罄 / 重复 / 未开票 ...
-    else 校验通过
-        R-->>A: 0
-        A->>MQ: ticket.grab -> ticket.grab.queue
-        A->>MQ: ticket.delay -> ticket.delay.queue（只等 TTL，无消费者）
-        A-->>C: 返回 orderId（此时订单尚未落库）
-        MQ->>A: 消费下单消息
-        A->>DB: 乐观锁扣库存 + 插入订单（订单号幂等）
-    end
-    Note over MQ,A: 延迟队列消息 TTL 到期，作为死信被路由到 ticket.timeout.queue
-    MQ->>A: 消费超时消息
-    A->>DB: status=1 才取消（条件更新保证幂等）
-    A->>R: 库存 +1，移除限购占位
-```
 
 ### 为什么这么设计
 
@@ -233,19 +155,23 @@ sequenceDiagram
 
 `spring.rabbitmq.listener.simple.retry` 开启本地重试（3 次、指数退避），重试耗尽后 `default-requeue-rejected=false` 让消息进入死信交换机 `ticket.dlx`，最终落到 `ticket.dead.queue`，避免「失败消息无限重回队列打满 CPU」。
 
-**5. 超时关单：TTL + 死信队列**
+**5. 超时关单：TTL + 死信路由（延迟关单，不是死信队列）**
 
 RabbitMQ 原生不支持任意时长的延迟消息（需要额外插件），这里用经典方案：
 
 1. 下单时把消息投到 `ticket.delay.queue`，这个队列**没有消费者**，只设置了 `x-message-ttl = app.order.timeout-ms`；
-2. 消息在队列里存活到期后成为死信，按 `x-dead-letter-exchange / routing-key` 被重新路由到 `ticket.timeout.queue`；
+2. 消息在队列里存活到期后成为「死信」，按 `x-dead-letter-exchange / routing-key` 被重新路由到 `ticket.timeout.queue`——这里借死信机制做延迟，**不是**进 `ticket.dead.queue`；
 3. 消费者收到后检查订单：已支付什么都不做；未支付则 `status = 1` 条件更新为已取消，**只有更新成功的那次才回补库存**，重复消费或与支付并发都不会多加票。
 
-回补同时作用于三处：MySQL 库存 +1、Redis 库存 +1、移除该用户的限购占位，用户可重新抢票。
+回补同时作用于三处：MySQL 库存 +1、Redis 库存 +1、移除该用户的限购占位，用户可重新抢票。若延迟消息丢失，由 `task/OrderTimeoutSweeper` 定时扫表兜底：扫未支付且过期的订单复用同一条件更新关单，与延迟消息并发也不会重复回补。
 
 **6. 失败补偿**
 
-如果 Redis 预扣成功但消息发送失败（broker 不可用），接口会立即回补 Redis 库存与限购标记，返回「系统繁忙」，避免「扣了票却没有订单」；落库时若 DB 库存不足（说明 Redis 与 DB 不一致），回补 Redis 并记录告警，消息正常 ack，不做无意义重试。
+如果 Redis 预扣成功但消息没进 MQ，立即回补 Redis 库存与限购标记，避免「扣了票却没有订单」。这条补偿有两条触发路径：
+- **同步异常**：broker 明确不可用时 `convertAndSend` 抛异常，接口捕获后回补并返回「系统繁忙」；
+- **异步确认失败**：抢票下单消息开启 `publisher confirm + return`（`publisher-confirm-type: correlated`、`mandatory: true`），broker 未确认（nack）或路由失败退回时，由 `TicketMessageProducer` 的回调回补。
+
+落库时若 DB 库存不足（说明 Redis 与 DB 不一致），回补 Redis 并记录告警，消息正常 ack，不做无意义重试。
 
 ---
 
@@ -277,6 +203,10 @@ ticket.exchange (direct)
 ticket.dlx (direct)
   └─ ticket.dead    -> ticket.dead.queue      重试耗尽后的死信
 ```
+
+> ⚠️ 两处「死信」别混：
+> - `ticket.delay.queue` 消息 TTL 到期 → 成为该队列的「死信」→ 按它的 DLX 路由到 `ticket.timeout.queue`（借死信机制做延迟，**有消费者接**）；
+> - `ticket.grab.queue` / `ticket.timeout.queue` 消费重试耗尽 → 经 `ticket.dlx` 落到 `ticket.dead.queue`（失败隔离，**无消费者**）。
 
 多项目共用同一个 RabbitMQ 时，通过 vhost（本项目用 `show-ticket`）隔离交换机和队列。
 
@@ -334,22 +264,23 @@ show-ticket
 
 ---
 
-## 压测（已实测 11 轮）
+## 压测（冷启动 vs 稳态）
 
-压测实际已完成（2026-10-27，11 轮，每轮只改一个变量），方法、数据与归因见 [07 压测实战](docs/07-压测实战-六轮排查复盘.md)；压测计划（JMX）、token 造数与轮间复位脚本见 [loadtest/README.md](loadtest/README.md)。结论速记：
+压测方法与归因见 [07 压测实战：冷启动与稳态](docs/07-压测实战-冷启动与稳态.md)；压测计划（JMX）、token 造数与轮间复位脚本见 [loadtest/README.md](loadtest/README.md)。结论速记：
 
-- 500 用户抢 50 张票：每轮订单数精确等于库存，零超卖、零重复；稳态基线 P99 128ms、零错误；
-- 洪峰轮（Ramp-up 1s）出现的连接被拒，逐项排除 GC / 日志 / channel / 连接池 / 流控后归因为同机自压测干扰；复测三轮洪峰零被拒、吞吐约 490 req/s；
-- 口径：单机自测数字只用于轮间对比，绝对容量需分机部署梯度加压再测（下一步计划）。
+- 500 用户抢 50 张票：订单数精确等于库存，零超卖、零重复，60 秒未支付自动关单回补；
+- **稳态**（预热后）：avg 4~5ms、P99 10~24ms、零系统错误；
+- **冷启动首轮**（重启后端后的首批流量）：avg ~111ms、P99 ~462ms——首轮必须作为预热轮丢弃；
+- **异步 vs 同步落库对照**：吞吐不变（都约 490/s，被 ramp 限制），avg 4~5ms → 10~15ms，**P99 10~24ms → 94~125ms**——异步化的收益集中在长尾；
 
-对比口径（可选）：把 `grabTicket` 改回「同步扣库 + 事务落库」的老实现，同一台机器压出 QPS 和 P99，即可得到「异步削峰收益」的对照数据。
+异步 vs 同步落库的对照已实测（结果见上），完整方法与 `app.grab.mode` 开关见 [07 压测实战](docs/07-压测实战-冷启动与稳态.md) 第 6 节。
 
 ---
 
 ## 已知不足 / 可继续优化
 
 - 延迟关单依赖队列 TTL，改超时时间需要重建延迟队列；且长 TTL 场景下死信触发依赖队头消息，不适合差异化延迟；
-- 未开启 publisher confirm / return，极端情况下消息可能丢；可加本地消息表或事务性 outbox；
+- 发送端已开 publisher confirm / return（抢票消息防发送丢失），超时关单也有扫表兜底（延迟消息丢了仍能兜底关单）；本地消息表 / 事务性 outbox 仍未做；
 - Redis 与 DB 库存回补是两步操作，进程崩溃时可能不一致；
 - 前端为演示级实现：只覆盖登录/场馆/抢票/订单主流程，未做权限分级、图片上传和响应式适配；
-- 未接入 ES 与限流，搜索仍是 `LIKE`，秒杀接口也没有令牌桶。
+- 未接入 ES，搜索仍是 `LIKE`；
