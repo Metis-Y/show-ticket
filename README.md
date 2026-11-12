@@ -49,7 +49,6 @@
 - [06 前端与 nginx 部署](docs/06-前端与nginx部署.md)
 - [07 压测实战：冷启动与稳态](docs/07-压测实战-冷启动与稳态.md)
 - [08 抢票入口防护](docs/08-抢票入口防护设计.md)
-- [面试问答手册](docs/面试问答.md)
 
 ---
 
@@ -230,7 +229,7 @@ show-ticket
 │   ├── nginx/                      # 本地 nginx 配置与启动脚本（8080 端口）
 │   └── vite.config.js              # 开发模式 /api 代理
 ├── sql/show_ticket.sql             # 建表 + 种子数据
-├── docs/                           # 技术方案文档 + 面试问答
+├── docs/                           # 技术方案文档
 ├── docker-compose.yml              # MySQL / Redis / RabbitMQ（备用一键环境）
 └── README.md
 ```
