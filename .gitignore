@@ -20,5 +20,5 @@ loadtest/flight*.jfr
 loadtest/flight_dump.jfr
 loadtest/__pycache__/
 
-# docs 文档仅保留本地，不再入库推送
-docs/*.md
+# 面试问答（答案 key）仅保留本地；设计文档正常入库
+docs/面试问答.md

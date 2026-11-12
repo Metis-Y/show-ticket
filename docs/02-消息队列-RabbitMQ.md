@@ -1,6 +1,6 @@
 # 消息队列：RabbitMQ 异步下单与延迟关单
 
-> 简历一句话：RabbitMQ 异步下单削峰，TTL + 死信队列实现订单超时自动取消与库存回补，消费端幂等 + 失败重试 + 死信兜底。
+> 简历一句话：RabbitMQ 异步下单削峰，TTL + 死信路由实现订单超时自动取消与库存回补，消费端幂等 + 失败重试 + 死信队列兜底失败消息。
 
 ## 1. 业务场景
 
@@ -19,6 +19,8 @@ ticket.dlx (direct)
   └─ ticket.dead    → ticket.dead.queue     消费重试耗尽后的死信
 ```
 
+> ⚠️ 两处「死信」别混：`ticket.delay.queue` 消息 TTL 到期是**借死信机制做延迟**（路由到 `ticket.timeout.queue`，有消费者接）；`ticket.grab.queue` / `ticket.timeout.queue` 消费重试耗尽才是**真死信**（落到 `ticket.dead.queue`，无消费者）。
+
 vhost 使用独立的 `show-ticket`，和同一台 RabbitMQ 上的其他项目隔离。
 
 ## 3. 两个核心流程
@@ -29,10 +31,10 @@ vhost 使用独立的 `show-ticket`，和同一台 RabbitMQ 上的其他项目�
 
 **幂等**：订单号在入口生成并随消息传递；消费端先按订单号查一次，已存在直接返回。RabbitMQ 是 at-least-once，重复投递是常态，幂等必须落在业务侧。
 
-### 3.2 延迟关单（TTL + 死信）
+### 3.2 延迟关单（TTL + 死信路由）
 
 1. 下单时把消息投到 `ticket.delay.queue`，该队列设置 `x-message-ttl = app.order.timeout-ms`；
-2. 队列**没有消费者**，消息到期后成为死信，按 `x-dead-letter-exchange/routing-key` 路由到 `ticket.timeout.queue`；
+2. 队列**没有消费者**，消息到期后成为「死信」，按 `x-dead-letter-exchange/routing-key` 路由到 `ticket.timeout.queue`（借死信机制做延迟，不是进 `ticket.dead.queue`）；
 3. 消费者检查订单状态：已支付什么都不做；未支付则 `status = 1` 条件更新为已取消，**只有更新成功的那次才回补库存**；
 4. 订单还没落库（下单消息还在排队）→ 抛异常让 MQ 稍后重试。
 
@@ -40,13 +42,25 @@ vhost 使用独立的 `show-ticket`，和同一台 RabbitMQ 上的其他项目�
 
 ## 4. 可靠性设计
 
-| 机制 | 配置/实现 |
-| --- | --- |
-| 消费重试 | `spring.rabbitmq.listener.simple.retry`：3 次、指数退避 |
-| 重试耗尽 | `default-requeue-rejected: false` + 队列 DLX → `ticket.dead.queue`，避免无限重回队列打满 CPU |
-| 幂等 | 订单号查重 + 数据库主键 |
-| 并发安全 | 关单和支付都是 `status = 1` 条件更新，谁先成功谁生效 |
-| 发送失败 | 捕获异常，回补 Redis 库存与限购占位 |
+| 机制     | 配置/实现                                                                           |
+| ------ | ------------------------------------------------------------------------------- |
+| 消费重试   | `spring.rabbitmq.listener.simple.retry`：3 次、指数退避                                |
+| 重试耗尽   | `default-requeue-rejected: false` + 队列 DLX → `ticket.dead.queue`，避免无限重回队列打满 CPU |
+| 幂等     | 订单号查重 + 数据库主键                                                                   |
+| 并发安全   | 关单和支付都是 `status = 1` 条件更新，谁先成功谁生效                                               |
+| 发送失败   | 捕获异常 + publisher confirm/return 回调，回补 Redis 库存与限购占位                             |
+| 延迟消息丢失 | 定时扫表兜底（`OrderTimeoutSweeper`）扫描未支付超时订单，复用同一条件更新                                 |
+
+### 死信消息怎么处理（方案，未实现）
+
+死信队列只隔离失败消息、不自动消解。生产善后分四层：
+
+1. **监控告警**：盯死信队列长度，堆积就报警（管理台 / Prometheus 指标 / 定时任务查队列长度）；
+2. **人工重投**：管理台看死因头与原队列，修好后手动重投回原队列；
+3. **自动重投 + 限次数**：写死信消费者按死因头里的重投次数，< N 重发回原队列、≥ N 转人工（防「真坏消息」死循环）；
+4. **死信落库 + 补偿表**：失败消息存库成补偿表，后台定时/人工按业务 key 处理（outbox 思路）。
+
+本项目最该补：**抢票消息死信 → 回补库存**（否则「扣了票、订单没生成」）；关单消息死信可忽略（扫表已兜底）。
 
 ## 5. 为什么用 RabbitMQ
 
